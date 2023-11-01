@@ -5,4 +5,20 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["std", "alloc", "serde/std", "serde/alloc"]
+serde = ["dep:serde", "dep:bson"]
+std = ["alloc", "thiserror"]
+alloc = []
+lz4 = ["dep:lz4"]
+lzma = ["dep:lzma"]
+brotli = ["dep:brotli"]
+
 [dependencies]
+brotli = { version = "3.4.0", optional = true }
+bson = { version = "2.7.0", optional = true }
+lz4 = { version = "1.24.0", optional = true }
+lzma = { version = "0.2.2", optional = true }
+serde = { version = "1.0.190", optional = true }
+thiserror = { version = "1.0.50", optional = true }
+varint-compression = "0.2.0"
