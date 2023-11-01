@@ -7,6 +7,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::borrow::Cow;
 use core::fmt::{Display, Formatter};
+use std::io::Cursor;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer};
 #[cfg(feature = "serde")]
@@ -84,11 +85,16 @@ pub fn split_froox_container_header(m: &[u8]) -> Result<FrooxContainer, FrooxCon
     let compress_method = FrooxContainerCompressMethod::try_from(i)
         .map_err(|_| FrooxContainerExtractError::UnknownCompressionMethod)?;
 
-    Ok(FrooxContainer {
+    Ok(FrooxContainer::Current {
         header: FrDT(()),
         compress_method,
         raw_content: m,
     })
+}
+
+#[cfg(feature = "legacy")]
+pub fn legacy(n: &[u8]) -> FrooxContainer {
+    FrooxContainer::Legacy { raw_content: n }
 }
 
 #[cfg(feature = "serde")]
@@ -100,15 +106,25 @@ pub enum DeserializeError {
     Lz4Decompression(#[from] Lz4DecompressionError),
     #[cfg(feature = "lzma")]
     #[cfg_attr(feature = "std", error("lzma decompressor: {0}"))]
-    LzmaDecompression(#[from] lzma::Error),
+    LzmaDecompression(std::io::Error),
     #[cfg(feature = "std")]
     #[cfg_attr(feature = "std", error("I/O stream error: {0}"))]
     Io(#[from] std::io::Error),
     #[cfg(not(all(feature = "lz4", feature = "lzma", feature = "brotli")))]
     #[cfg_attr(feature = "std", error("decompress: {0} is not installed (perhaps need re-compile?)"))]
     NonInstalledDecompressMethod(FrooxContainerCompressMethod),
+    #[cfg(feature = "std")]
     #[cfg_attr(feature = "std", error("bson: {0}"))]
     Bson(#[from] bson::de::Error),
+    #[cfg(feature = "std")]
+    #[cfg_attr(feature = "std", error("brute force on legacy format input was failed (lzma = {lzma}, lz4 = {lz4}, bson = {bson})"))]
+    LegacyBruteforce {
+        #[cfg(feature = "lzma")]
+        lzma: std::io::Error,
+        #[cfg(feature = "lz4")]
+        lz4: std::io::Error,
+        bson: bson::de::Error,
+    }
 }
 
 #[cfg(feature = "std")]
@@ -123,45 +139,96 @@ pub struct Lz4DecompressionError(());
 pub struct FrDT(());
 
 #[derive(Debug)]
-pub struct FrooxContainer<'a> {
-    header: FrDT,
-    compress_method: FrooxContainerCompressMethod,
-    raw_content: &'a [u8],
+pub enum FrooxContainer<'a> {
+    #[cfg(feature = "legacy")]
+    Legacy {
+        raw_content: &'a [u8],
+    },
+    Current {
+        header: FrDT,
+        compress_method: FrooxContainerCompressMethod,
+        raw_content: &'a [u8],
+    },
 }
 
 impl<'a> FrooxContainer<'a> {
     #[cfg(all(feature = "serde", feature = "std"))]
     pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T, DeserializeError> {
         use std::io::{Cursor, Read};
-        let cursor = Cursor::new(self.raw_content);
-        let after_decompress: Cow<'_, [u8]> = match self.compress_method {
-            FrooxContainerCompressMethod::None => {
-                self.raw_content.into()
-            }
-            #[cfg(feature = "lz4")]
-            FrooxContainerCompressMethod::LZ4 => {
-                // FIXME: deserialize: Io(Custom { kind: Other, error: LZ4Error("ERROR_frameType_unknown") })
+        match self {
+            #[cfg(feature = "legacy")]
+            FrooxContainer::Legacy { raw_content } => {
+                let mut raw_content = Cursor::new(*raw_content);
                 let mut buf = vec![];
-                lz4::Decoder::new(cursor).map_err(Lz4DecompressionError)?.read_to_end(&mut buf)?;
-                buf.into()
-            }
-            #[cfg(feature = "lzma")]
-            FrooxContainerCompressMethod::LZMA => {
-                let mut buf = vec![];
-                lzma::read(cursor)?.read_to_end(&mut buf)?;
-                buf.into()
-            }
-            #[cfg(feature = "brotli")]
-            FrooxContainerCompressMethod::Brotli => {
-                let mut brotli = vec![];
-                brotli::Decompressor::new(cursor, 16 * 1024).read_to_end(&mut brotli)?;
-                brotli.into()
-            }
-            #[cfg(not(all(feature = "lz4", feature = "lzma", feature = "brotli")))]
-            other => return Err(DeserializeError::NonInstalledDecompressMethod(other))
-        };
 
-        let read = bson::from_slice::<T>(after_decompress.as_ref())?;
-        Ok(read)
+                #[cfg(feature = "lzma")]
+                let lzma_error = {
+                    match seven_zip::lzma_decompress(&mut raw_content, &mut buf) {
+                        Ok(()) => {
+                            let x = bson::from_slice(&buf)?;
+
+                            return Ok(x)
+                        }
+                        Err(lzma) => lzma
+                    }
+                };
+
+                #[cfg(feature = "lz4")]
+                let lz4_error = {
+                    match lz4::Decoder::new(raw_content.clone()).map_err(Lz4DecompressionError)?.read_to_end(&mut buf) {
+                        Ok(_) => {
+                            let x = bson::from_slice(&buf)?;
+
+                            return Ok(x)
+                        }
+                        Err(e) => e
+                    }
+                };
+
+                // are you giving raw BSON here?
+                let x = bson::from_slice(raw_content.get_ref()).map_err(|e| {
+                    DeserializeError::LegacyBruteforce {
+                        #[cfg(feature = "lzma")]
+                        lzma: lzma_error,
+                        #[cfg(feature = "lz4")]
+                        lz4: lz4_error,
+                        bson: e,
+                    }
+                })?;
+
+                Ok(x)
+            }
+            FrooxContainer::Current { header: _, compress_method, raw_content } => {
+                let mut cursor = Cursor::new(*raw_content);
+                let after_decompress: Cow<'_, [u8]> = match compress_method {
+                    FrooxContainerCompressMethod::None => {
+                        Cow::Borrowed(*cursor.get_ref())
+                    }
+                    #[cfg(feature = "lz4")]
+                    FrooxContainerCompressMethod::LZ4 => {
+                        let mut buf = vec![];
+                        lz4::Decoder::new(cursor).map_err(Lz4DecompressionError)?.read_to_end(&mut buf)?;
+                        buf.into()
+                    }
+                    #[cfg(feature = "lzma")]
+                    FrooxContainerCompressMethod::LZMA => {
+                        let mut buf = vec![];
+                        seven_zip::lzma_decompress(&mut cursor, &mut buf).map_err(|e| DeserializeError::LzmaDecompression(e))?;
+                        buf.into()
+                    }
+                    #[cfg(feature = "brotli")]
+                    FrooxContainerCompressMethod::Brotli => {
+                        let mut brotli = vec![];
+                        brotli::Decompressor::new(cursor, 16 * 1024).read_to_end(&mut brotli)?;
+                        brotli.into()
+                    }
+                    #[cfg(not(all(feature = "lz4", feature = "lzma", feature = "brotli")))]
+                    other => return Err(DeserializeError::NonInstalledDecompressMethod(other))
+                };
+
+                let read = bson::from_slice::<T>(after_decompress.as_ref())?;
+                Ok(read)
+            }
+        }
     }
 }
