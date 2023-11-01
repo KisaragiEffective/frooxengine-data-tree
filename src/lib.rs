@@ -165,26 +165,3 @@ impl<'a> FrooxContainer<'a> {
         Ok(read)
     }
 }
-
-#[cfg(feature = "std")]
-fn main() {
-    use std::fs::File;
-    use std::io::{BufReader, Read};
-    let mut m = BufReader::new(
-        File::open(
-            std::env::args().next().unwrap()
-        ).unwrap()
-    );
-
-    let mut buf = vec![];
-
-    m.read_to_end(&mut buf).expect("bulk read");
-
-    let m = split_froox_container_header(&buf).expect("raw");
-
-    println!("{m:?}", m = &m);
-
-    let r = m.deserialize::<bson::Bson>().expect("deserialize");
-
-    println!("{r:?}");
-}
