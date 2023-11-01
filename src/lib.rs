@@ -124,21 +124,28 @@ pub enum DeserializeError {
         #[cfg(feature = "lz4")]
         lz4: std::io::Error,
         bson: bson::de::Error,
-    }
+    },
 }
 
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct Lz4DecompressionError(::std::io::Error);
-
+pub enum Lz4DecompressionError {
+    #[error("I/O error: {0}")]
+    Io(::std::io::Error),
+    #[error("VarInt was corrupted: {0}")]
+    CorruptedDotNetSpecificHeader(variant_compression_2::Error),
+}
 #[cfg(not(feature = "std"))]
 pub struct Lz4DecompressionError(());
 
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct LzmaDecompressionError(::std::io::Error);
+pub enum LzmaDecompressionError {
+    #[error("I/O error: {0}")]
+    Io(::std::io::Error),
+    #[error("VarInt was corrupted: {0}")]
+    CorruptedDotNetSpecificHeader(variant_compression_2::Error),
+}
 
 #[cfg(not(feature = "std"))]
 pub struct LzmaDecompressionError(());
@@ -183,7 +190,14 @@ impl<'a> FrooxContainer<'a> {
 
                 #[cfg(feature = "lz4")]
                 let lz4_error = {
-                    match lz4::Decoder::new(raw_content.clone()).map_err(Lz4DecompressionError)?.read_to_end(&mut buf) {
+                    // .NET-specific handle (thanks, @ThomFox!) - see https://github.com/GuVAnj8Gv3RJ/NeosAccountDownloader/issues/17#issuecomment-1601662004
+                    let (_flags, raw_content) = variant_compression_2::decompress(raw_content.get_ref())
+                        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
+                    let (_uncompressed_size, raw_content) = variant_compression_2::decompress(raw_content)
+                        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
+                    let (_compressed_size, raw_content) = variant_compression_2::decompress(raw_content)
+                        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
+                    match lz4::Decoder::new(raw_content.clone()).map_err(Lz4DecompressionError::Io)?.read_to_end(&mut buf) {
                         Ok(_) => {
                             let x = bson::from_slice(&buf)?;
 
@@ -215,13 +229,13 @@ impl<'a> FrooxContainer<'a> {
                     #[cfg(feature = "lz4")]
                     FrooxContainerCompressMethod::LZ4 => {
                         let mut buf = vec![];
-                        lz4::Decoder::new(cursor).map_err(Lz4DecompressionError)?.read_to_end(&mut buf)?;
+                        lz4::Decoder::new(cursor).map_err(Lz4DecompressionError::Io)?.read_to_end(&mut buf)?;
                         buf.into()
                     }
                     #[cfg(feature = "lzma")]
                     FrooxContainerCompressMethod::LZMA => {
                         let mut buf = vec![];
-                        seven_zip::lzma_decompress(&mut cursor, &mut buf).map_err(|e| DeserializeError::LzmaDecompression(LzmaDecompressionError(e)))?;
+                        seven_zip::lzma_decompress(&mut cursor, &mut buf).map_err(|e| DeserializeError::LzmaDecompression(LzmaDecompressionError::Io(e)))?;
                         buf.into()
                     }
                     #[cfg(feature = "brotli")]
