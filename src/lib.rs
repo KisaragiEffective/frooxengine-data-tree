@@ -5,6 +5,7 @@ extern crate alloc;
 
 #[cfg(feature = "alloc")]
 use alloc::string::String;
+#[cfg(feature = "alloc")]
 use alloc::borrow::Cow;
 use core::fmt::{Display, Formatter};
 #[cfg(feature = "serde")]
