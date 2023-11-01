@@ -16,7 +16,7 @@ use thiserror::Error;
 
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(Error))]
-enum FrooxContainerExtractError {
+pub enum FrooxContainerExtractError {
     #[cfg_attr(feature = "std", error("FrDT magic number is corrupted"))]
     InvalidFirstMagicNumber,
     #[cfg_attr(feature = "std", error("Reserved header is corrupted"))]
@@ -31,7 +31,7 @@ enum FrooxContainerExtractError {
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
-enum FrooxContainerCompressMethod {
+pub enum FrooxContainerCompressMethod {
     None,
     LZ4,
     LZMA,
@@ -65,7 +65,7 @@ impl TryFrom<u8> for FrooxContainerCompressMethod {
     }
 }
 
-fn split_froox_container_header(m: &[u8]) -> Result<FrooxContainer, FrooxContainerExtractError> {
+pub fn split_froox_container_header(m: &[u8]) -> Result<FrooxContainer, FrooxContainerExtractError> {
     let Some(m) = m.strip_prefix(b"FrDT") else {
         return Err(FrooxContainerExtractError::InvalidFirstMagicNumber)
     };
@@ -94,7 +94,7 @@ fn split_froox_container_header(m: &[u8]) -> Result<FrooxContainer, FrooxContain
 #[cfg(feature = "serde")]
 #[cfg_attr(feature = "std", derive(Error))]
 #[derive(Debug)]
-enum DeserializeError {
+pub enum DeserializeError {
     #[cfg(feature = "lz4")]
     #[cfg_attr(feature = "std", error("lz4 decompressor: {0}"))]
     Lz4Decompression(#[from] Lz4DecompressionError),
@@ -114,16 +114,16 @@ enum DeserializeError {
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
 #[error("{0}")]
-struct Lz4DecompressionError(::std::io::Error);
+pub struct Lz4DecompressionError(::std::io::Error);
 
 #[cfg(not(feature = "std"))]
-struct Lz4DecompressionError(());
+pub struct Lz4DecompressionError(());
 
 #[derive(Debug)]
-struct FrDT(());
+pub struct FrDT(());
 
 #[derive(Debug)]
-struct FrooxContainer<'a> {
+pub struct FrooxContainer<'a> {
     header: FrDT,
     compress_method: FrooxContainerCompressMethod,
     raw_content: &'a [u8],
@@ -131,7 +131,7 @@ struct FrooxContainer<'a> {
 
 impl<'a> FrooxContainer<'a> {
     #[cfg(all(feature = "serde", feature = "std"))]
-    fn deserialize<T: DeserializeOwned>(&self) -> Result<T, DeserializeError> {
+    pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T, DeserializeError> {
         use std::io::{Cursor, Read};
         let cursor = Cursor::new(self.raw_content);
         let after_decompress: Cow<'_, [u8]> = match self.compress_method {
