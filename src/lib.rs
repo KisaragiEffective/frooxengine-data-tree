@@ -26,7 +26,7 @@ enum FrooxContainerExtractError {
     #[cfg_attr(feature = "std", error("Unknown compression method"))]
     UnknownCompressionMethod,
     #[cfg_attr(feature = "std", error("Got corrupted VarInt: {0}"))]
-    VarIntDecodeError(String),
+    VarIntDecodeError(variant_compression_2::Error),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -75,7 +75,7 @@ fn split_froox_container_header(m: &[u8]) -> Result<FrooxContainer, FrooxContain
     };
 
     // It seems that froox container use var-int to express inner compress method.
-    let (i, m) = varint_compression::decompress(m).map_err(|e| FrooxContainerExtractError::VarIntDecodeError(e.to_owned()))?;
+    let (i, m) = variant_compression_2::decompress(m).map_err(|e| FrooxContainerExtractError::VarIntDecodeError(e))?;
 
     let Ok(i) = u8::try_from(i) else {
         return Err(FrooxContainerExtractError::TooLargeForCompressionMethod)
