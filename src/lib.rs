@@ -7,7 +7,6 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::borrow::Cow;
 use core::fmt::{Display, Formatter};
-use std::io::Cursor;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer};
 #[cfg(feature = "serde")]
@@ -106,7 +105,7 @@ pub enum DeserializeError {
     Lz4Decompression(#[from] Lz4DecompressionError),
     #[cfg(feature = "lzma")]
     #[cfg_attr(feature = "std", error("lzma decompressor: {0}"))]
-    LzmaDecompression(std::io::Error),
+    LzmaDecompression(#[from] LzmaDecompressionError),
     #[cfg(feature = "std")]
     #[cfg_attr(feature = "std", error("I/O stream error: {0}"))]
     Io(#[from] std::io::Error),
@@ -134,6 +133,14 @@ pub struct Lz4DecompressionError(::std::io::Error);
 
 #[cfg(not(feature = "std"))]
 pub struct Lz4DecompressionError(());
+
+#[cfg(feature = "std")]
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct LzmaDecompressionError(::std::io::Error);
+
+#[cfg(not(feature = "std"))]
+pub struct LzmaDecompressionError(());
 
 #[derive(Debug)]
 pub struct FrDT(());
@@ -213,7 +220,7 @@ impl<'a> FrooxContainer<'a> {
                     #[cfg(feature = "lzma")]
                     FrooxContainerCompressMethod::LZMA => {
                         let mut buf = vec![];
-                        seven_zip::lzma_decompress(&mut cursor, &mut buf).map_err(|e| DeserializeError::LzmaDecompression(e))?;
+                        seven_zip::lzma_decompress(&mut cursor, &mut buf).map_err(|e| DeserializeError::LzmaDecompression(LzmaDecompressionError(e)))?;
                         buf.into()
                     }
                     #[cfg(feature = "brotli")]
