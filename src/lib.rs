@@ -3,11 +3,12 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-#[cfg(feature = "alloc")]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::string::String;
 #[cfg(feature = "alloc")]
 use alloc::borrow::Cow;
 use core::fmt::{Display, Formatter};
+use lz4_flex::decompress_size_prepended;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer};
 #[cfg(feature = "serde")]
@@ -121,8 +122,12 @@ pub enum DeserializeError {
     LegacyBruteforce {
         #[cfg(feature = "lzma")]
         lzma: std::io::Error,
+        #[cfg(not(feature = "lzma"))]
+        lzma: (),
         #[cfg(feature = "lz4")]
-        lz4: std::io::Error,
+        lz4: Lz4DecompressionError,
+        #[cfg(not(feature = "lz4"))]
+        lz4: (),
         bson: bson::de::Error,
     },
 }
@@ -132,9 +137,20 @@ pub enum DeserializeError {
 pub enum Lz4DecompressionError {
     #[error("I/O error: {0}")]
     Io(::std::io::Error),
+    #[error("I/O error on exact_read: {0}")]
+    ExactRead(::std::io::Error),
     #[error("VarInt was corrupted: {0}")]
     CorruptedDotNetSpecificHeader(variant_compression_2::Error),
+    #[error("Invalid chunk flag (maybe it's not created with LZ4.NET?)")]
+    InvalidChunkFlag(()),
+    #[error("chunk is too short ({actual_length} < {excepted_length})")]
+    ChunkIsTooShort { actual_length: usize, excepted_length: usize },
+    #[error("size header is broken ({compressed} > {uncompressed})")]
+    InvalidSizeHeader { compressed: u64, uncompressed: u64 },
+    #[error("lz4_flex: {0}")]
+    Lz4Flex(lz4_flex::block::DecompressError)
 }
+
 #[cfg(not(feature = "std"))]
 pub struct Lz4DecompressionError(());
 
@@ -188,23 +204,13 @@ impl<'a> FrooxContainer<'a> {
                     }
                 };
 
-                #[cfg(feature = "lz4")]
-                let lz4_error = {
-                    // .NET-specific handle (thanks, @ThomFox!) - see https://github.com/GuVAnj8Gv3RJ/NeosAccountDownloader/issues/17#issuecomment-1601662004
-                    let (_flags, raw_content) = variant_compression_2::decompress(raw_content.get_ref())
-                        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
-                    let (_uncompressed_size, raw_content) = variant_compression_2::decompress(raw_content)
-                        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
-                    let (_compressed_size, raw_content) = variant_compression_2::decompress(raw_content)
-                        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
-                    match lz4::Decoder::new(raw_content.clone()).map_err(Lz4DecompressionError::Io)?.read_to_end(&mut buf) {
-                        Ok(_) => {
-                            let x = bson::from_slice(&buf)?;
+                let lz4_error = match read_lz4net_chunks(raw_content.get_ref()) {
+                    Ok(d) => {
+                        let x = bson::from_slice(&d)?;
 
-                            return Ok(x)
-                        }
-                        Err(e) => e
-                    }
+                        return Ok(x)
+                    },
+                    Err(e) => e
                 };
 
                 // are you giving raw BSON here?
@@ -228,9 +234,8 @@ impl<'a> FrooxContainer<'a> {
                     }
                     #[cfg(feature = "lz4")]
                     FrooxContainerCompressMethod::LZ4 => {
-                        let mut buf = vec![];
-                        lz4::Decoder::new(cursor).map_err(Lz4DecompressionError::Io)?.read_to_end(&mut buf)?;
-                        buf.into()
+                        let buf = read_lz4net_chunks(cursor.get_ref())?;
+                        lz4_flex::decompress(&buf, 0).map_err(Lz4DecompressionError::Lz4Flex)?.into()
                     }
                     #[cfg(feature = "lzma")]
                     FrooxContainerCompressMethod::LZMA => {
@@ -253,4 +258,81 @@ impl<'a> FrooxContainer<'a> {
             }
         }
     }
+}
+
+#[cfg(all(feature = "lz4", feature = "serde"))]
+/// don't use this. This has bug and not working properly!!
+fn read_lz4net_chunks(raw: &[u8]) -> Result<Vec<u8>, Lz4DecompressionError> {
+    // TODO: this is totally bugged, LZ4NET uses weird codec :(
+    let mut buf = Vec::with_capacity(2048);
+    let mut rec_acc = raw;
+    while !rec_acc.is_empty() {
+        let (decoded, rest) = read_lz4net_chunk(rec_acc)?;
+        println!("decoded: {}", decoded.len());
+
+        buf.extend_from_slice(&decoded);
+
+        rec_acc = rest;
+    }
+
+    Ok(buf)
+}
+
+#[cfg(feature = "lz4")]
+fn read_lz4net_chunk(raw: &[u8]) -> Result<(Cow<'_, [u8]>, &[u8]), Lz4DecompressionError> {
+    println!("raw: {}", raw.len());
+    use std::io::Read;
+    // LZ4NET-specific handle (thanks, @ThomFox!) - see https://github.com/GuVAnj8Gv3RJ/NeosAccountDownloader/issues/17#issuecomment-1601662004
+    let (flags, raw_content) = variant_compression_2::decompress(raw)
+        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
+    let (uncompressed_size, raw_content) = variant_compression_2::decompress(raw_content)
+        .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
+    let compressed = (flags & 1) == 1;
+    let (compressed_size, raw_content) = if compressed {
+        variant_compression_2::decompress(raw_content)
+            .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?
+    } else {
+        (uncompressed_size, raw_content)
+    };
+
+    if compressed_size > uncompressed_size {
+        return Err(Lz4DecompressionError::InvalidSizeHeader {
+            compressed: compressed_size,
+            uncompressed: uncompressed_size
+        })
+    }
+    let compressed_size = compressed_size as usize;
+    let uncompressed_size = uncompressed_size as usize;
+    println!("flags: {flags}");
+    println!("con: {compressed_size}");
+    println!("de-con: {uncompressed_size}");
+    let (chunk, rest) = raw_content.split_at(compressed_size);
+    if chunk.len() < compressed_size {
+        return Err(Lz4DecompressionError::ChunkIsTooShort {
+            actual_length: chunk.len(),
+            excepted_length: compressed_size,
+        })
+    }
+    debug_assert!(chunk.len() == compressed_size);
+
+    let decoded = if compressed {
+        let lz4_block = &chunk[..compressed_size];
+        eprintln!("{r:X?}", r = &lz4_block[0..10]);
+        let maybe_len = lz4_block[0] >> 4;
+        let lz4_block = if maybe_len == 15 {
+            let (y, r) = variant_compression_2::decompress(&lz4_block[1..]).expect("o");
+            eprintln!("{y} ~= {:?}", &r[0..10]);
+            &r[6..]
+        } else {
+            lz4_block
+        };
+        let mut buf = decompress_size_prepended(lz4_block).expect("ohoh");
+
+                buf.into()
+    } else {
+        // Not compressed
+        Cow::Borrowed(chunk)
+    };
+
+    Ok((decoded, rest))
 }
