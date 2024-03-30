@@ -117,7 +117,22 @@ pub enum DeserializeError {
     #[cfg_attr(feature = "std", error("bson: {0}"))]
     Bson(#[from] bson::de::Error),
     #[cfg(feature = "std")]
-    #[cfg_attr(feature = "std", error("brute force on legacy format input was failed (lzma = {lzma}, lz4 = {lz4}, bson = {bson})"))]
+    #[cfg_attr(
+        all(feature = "lzma", all(feature = "lz4")),
+        error("brute force on legacy format input was failed (lzma = {lzma}, lz4 = {lz4}, bson = {bson})")
+    )]
+    #[cfg_attr(
+        all(feature = "lzma", not(feature = "lz4")),
+        error("brute force on legacy format input was failed (lzma = {lzma}, lz4 = <unavailable>, bson = {bson})")
+    )]
+    #[cfg_attr(
+        all(not(feature = "lzma"), feature = "lz4"),
+        error("brute force on legacy format input was failed (lzma = <unavailable>, lz4 = {lz4}, bson = {bson})")
+    )]
+    #[cfg_attr(
+        all(not(feature = "lzma"), not(feature = "lz4")),
+        error("brute force on legacy format input was failed (lzma = <unavailable>, lz4 = <unavailable>, bson = {bson})")
+    )]
     LegacyBruteforce {
         #[cfg(feature = "lzma")]
         lzma: std::io::Error,
@@ -245,7 +260,7 @@ impl<'a> FrooxContainer<'a> {
                         brotli.into()
                     }
                     #[cfg(not(all(feature = "lz4", feature = "lzma", feature = "brotli")))]
-                    other => return Err(DeserializeError::NonInstalledDecompressMethod(other))
+                    other => return Err(DeserializeError::NonInstalledDecompressMethod(*other))
                 };
 
                 let read = bson::from_slice::<T>(after_decompress.as_ref())?;
