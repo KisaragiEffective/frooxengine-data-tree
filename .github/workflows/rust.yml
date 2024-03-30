@@ -1,0 +1,43 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+        - no-default-features: true
+          features: "alloc"
+        - no-default-features: true
+          features: "std,alloc"
+        - no-default-features: true
+          features: "" # core only
+        - no-default-features: true
+          features: "std,alloc,serde"
+        - no-default-features: true
+          features: "std,alloc,lz4"
+        - no-default-features: true
+          features: "std,alloc,lzma"
+        - no-default-features: true
+          features: "std,alloc,brotli"
+        - no-default-features: true
+          features: "std,alloc,legacy"
+        - no-default-features: true
+          features: "std,alloc,serde,lz4,lzma,brotli,legacy"
+        
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build -F '${{ matrix.features }}' --no-default-features --verbose
+    - name: Run tests
+      run: cargo test  -F '${{ matrix.features }}' --no-default-features --verbose
