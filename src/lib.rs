@@ -8,8 +8,6 @@ extern crate alloc;
 
 use core::fmt::{Display, Formatter};
 #[cfg(feature = "serde")]
-use serde::{Deserialize, Deserializer};
-#[cfg(feature = "serde")]
 use serde::de::DeserializeOwned;
 #[cfg(feature = "std")]
 use thiserror::Error;
@@ -214,7 +212,7 @@ impl<'a> FrooxContainer<'a> {
                         .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
                     let (_compressed_size, raw_content) = variant_compression_2::decompress(raw_content)
                         .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
-                    match lz4::Decoder::new(raw_content.clone()).map_err(Lz4DecompressionError::Io)?.read_to_end(&mut buf) {
+                    match lz4::Decoder::new(raw_content).map_err(Lz4DecompressionError::Io)?.read_to_end(&mut buf) {
                         Ok(_) => {
                             let x = bson::from_slice(&buf)?;
 
