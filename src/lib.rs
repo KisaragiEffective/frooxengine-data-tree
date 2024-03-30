@@ -1,12 +1,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(feature = "unstable-model")]
+pub mod model;
+
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-#[cfg(feature = "alloc")]
-use alloc::string::String;
-#[cfg(feature = "alloc")]
-use alloc::borrow::Cow;
 use core::fmt::{Display, Formatter};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer};
@@ -184,7 +183,8 @@ pub enum FrooxContainer<'a> {
 impl<'a> FrooxContainer<'a> {
     #[cfg(all(feature = "serde", feature = "std"))]
     pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T, DeserializeError> {
-        use std::io::{Cursor, Read};
+        use std::io::Cursor;
+
         match self {
             #[cfg(feature = "legacy")]
             FrooxContainer::Legacy { raw_content } => {
@@ -205,6 +205,8 @@ impl<'a> FrooxContainer<'a> {
 
                 #[cfg(feature = "lz4")]
                 let lz4_error = {
+                    use std::io::Read;
+
                     // .NET-specific handle (thanks, @ThomFox!) - see https://github.com/GuVAnj8Gv3RJ/NeosAccountDownloader/issues/17#issuecomment-1601662004
                     let (_flags, raw_content) = variant_compression_2::decompress(raw_content.get_ref())
                         .map_err(Lz4DecompressionError::CorruptedDotNetSpecificHeader)?;
@@ -237,6 +239,9 @@ impl<'a> FrooxContainer<'a> {
             }
             FrooxContainer::Current { header: _, compress_method, raw_content } => {
                 let mut cursor = Cursor::new(*raw_content);
+                use std::borrow::Cow;
+                use std::io::Read;
+
                 let after_decompress: Cow<'_, [u8]> = match compress_method {
                     FrooxContainerCompressMethod::None => {
                         Cow::Borrowed(*cursor.get_ref())
