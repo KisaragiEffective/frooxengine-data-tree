@@ -23,7 +23,7 @@ legacy = []
 brotli = { version = "3.4.0", optional = true }
 bson = { version = "2.7.0", optional = true }
 lz4 = { version = "1.24.0", optional = true }
-serde = { version = "1.0.190", optional = true }
+serde = { version = "1.0.197", optional = true }
 seven_zip = { git = "https://github.com/ThomFox/seven_zip", version = "0.1.0", optional = true }
 thiserror = { version = "1.0.50", optional = true }
 variant-compression-2 = { git = "https://github.com/KisaragiEffective/vbyte-compression/", branch = "kisaragi", version = "0.2.0" }
